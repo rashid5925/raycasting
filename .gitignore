@@ -2,3 +2,6 @@
 # Ignore compiled object files
 *.o
 *.obj
+raycasting
+raycasting_terminal
+raycasting_dda

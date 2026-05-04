@@ -28,6 +28,8 @@ typedef struct {
 typedef struct {
     double distance;
     int hit_wall;
+    int side; // 0 for X, 1 for Y
+    double wall_x;
 } RayResult;
 
 int world_map[MAP_HEIGHT][MAP_WIDTH] = {
@@ -67,32 +69,72 @@ double deg_to_rad(double degrees) {
     return degrees * M_PI / 180.0;
 }
 
-RayResult cast_ray(Player *player, double ray_angle) {
-    double distance = 0.0;
-    RayResult result = {0, 0};
-    while (1) {
-        // x=x0 + tcos(θ), y=y0 + tsin(θ)
-        double x = player->position.x + distance * cos(ray_angle);
-        double y = player->position.y + distance * sin(ray_angle);
-        int map_x = (int)(x / CELL_SIZE);
-        int map_y = (int)(y / CELL_SIZE);
+RayResult cast_ray_dda(Player *player, double ray_angle) {
+    RayResult result = {0, 0, 0, 0};
+    double ray_dir_x = cos(ray_angle);
+    double ray_dir_y = sin(ray_angle);
 
-        if (map_x < 0 || map_x >= MAP_WIDTH || map_y < 0 || map_y >= MAP_HEIGHT) {
-            break;
+    // Convert player position to map-grid units
+    double pos_x = player->position.x / CELL_SIZE;
+    double pos_y = player->position.y / CELL_SIZE;
+
+    int map_x = (int)pos_x;
+    int map_y = (int)pos_y;
+
+    // 1e30 to avoid division by zero
+    double delta_dist_x = (ray_dir_x == 0) ? 1e30 : fabs(1.0 / ray_dir_x);
+    double delta_dist_y = (ray_dir_y == 0) ? 1e30 : fabs(1.0 / ray_dir_y);
+
+    int step_x, step_y;
+    double side_dist_x, side_dist_y;
+
+    if (ray_dir_x < 0) {
+        step_x = -1;
+        side_dist_x = (pos_x - map_x) * delta_dist_x;
+    } else {
+        step_x = 1;
+        side_dist_x = (map_x + 1.0 - pos_x) * delta_dist_x;
+    }
+
+    if (ray_dir_y < 0) {
+        step_y = -1;
+        side_dist_y = (pos_y - map_y) * delta_dist_y;
+    } else {
+        step_y = 1;
+        side_dist_y = (map_y + 1.0 - pos_y) * delta_dist_y;
+    }
+
+    while (1) {
+        if (side_dist_x < side_dist_y) {
+            side_dist_x += delta_dist_x;
+            map_x += step_x;
+            result.side = 0;
+        } else {
+            side_dist_y += delta_dist_y;
+            map_y += step_y;
+            result.side = 1;
         }
 
         if (world_map[map_y][map_x] > 0) {
-            result.distance = distance;
             result.hit_wall = world_map[map_y][map_x];
-            return result;
+            break;
         }
-        distance += STEP_SIZE;
-        if (distance > 2000) break;
+    
+        // default max distance if no wall is hit
+        if (map_x < 0 || map_x >= MAP_WIDTH || map_y < 0 || map_y >= MAP_HEIGHT) break;
     }
-    result.distance = MAX_DISTANCE;
-    result.hit_wall = 0;
-    return result; 
+
+    if (result.side == 0) {
+        result.distance = (side_dist_x - delta_dist_x) * CELL_SIZE;
+        result.wall_x = pos_y + result.distance / CELL_SIZE * ray_dir_y;
+    } else {
+        result.distance = (side_dist_y - delta_dist_y) * CELL_SIZE;
+        result.wall_x = pos_x + result.distance / CELL_SIZE * ray_dir_x;
+    }
+    result.wall_x -= floor(result.wall_x); // fractional part only for texture mapping
+    return result;
 }
+
 
 void draw_line(SDL_Renderer *renderer, int x1, int y1, int x2, int y2, Uint32 color, double shading) {
     Uint8 r = (color >> 24) & 0xFF;
@@ -101,6 +143,24 @@ void draw_line(SDL_Renderer *renderer, int x1, int y1, int x2, int y2, Uint32 co
     Uint8 a = color & 0xFF;
     SDL_SetRenderDrawColor(renderer, r * shading, g * shading, b * shading, a);
     SDL_RenderDrawLine(renderer, x1, y1, x2, y2);
+}
+
+void draw_line_textured(SDL_Renderer *renderer, RayResult result, int tex_x, double step, int x1, int y1, int x2, int y2, Uint32 texture[TEX_WIDTH][TEX_HEIGHT], double tex_pos, double shading) {
+    tex_x &= (TEX_WIDTH - 1);
+    for (int y = y1; y <= y2; y++) {
+        int tex_y = (int)tex_pos & (TEX_HEIGHT - 1);
+        tex_pos += step;
+        
+        Uint32 color = texture[tex_x][tex_y];
+        
+        Uint8 r = ((color >> 24) & 0xFF) * shading;
+        Uint8 g = ((color >> 16) & 0xFF) * shading;
+        Uint8 b = ((color >> 8) & 0xFF) * shading;
+        Uint8 a = (color & 0xFF) * shading;
+        
+        SDL_SetRenderDrawColor(renderer, r, g, b, a);
+        SDL_RenderDrawPoint(renderer, x1, y);
+    }
 }
 
 int main() {
@@ -113,6 +173,60 @@ int main() {
 
     SDL_Renderer *renderer = SDL_CreateRenderer(window, -1, SDL_RENDERER_ACCELERATED);
     SDL_RenderClear(renderer);
+
+    SDL_Surface* loadedSurface = SDL_LoadBMP("texture-1.bmp");
+    SDL_Surface* formattedSurface = SDL_ConvertSurfaceFormat(loadedSurface, SDL_PIXELFORMAT_RGBA8888, 0);
+    SDL_FreeSurface(loadedSurface);
+
+    int width = formattedSurface->w;
+    int height = formattedSurface->h;
+    Uint32* pixels = (Uint32*)formattedSurface->pixels;
+
+    Uint32 texture_1[TEX_WIDTH][TEX_HEIGHT];
+    for (int y = 0; y < TEX_HEIGHT; y++) {
+        for (int x = 0; x < TEX_WIDTH; x++) {
+            int src_x = (x * width) / TEX_WIDTH;
+            int src_y = (y * height) / TEX_HEIGHT;
+            texture_1[x][y] = pixels[src_y * width + src_x];
+        }
+    }
+    SDL_FreeSurface(formattedSurface);
+
+    loadedSurface = SDL_LoadBMP("texture-2.bmp");
+    formattedSurface = SDL_ConvertSurfaceFormat(loadedSurface, SDL_PIXELFORMAT_RGBA8888, 0);
+    SDL_FreeSurface(loadedSurface);
+
+    width = formattedSurface->w;
+    height = formattedSurface->h;
+    pixels = (Uint32*)formattedSurface->pixels;
+
+    Uint32 texture_2[TEX_WIDTH][TEX_HEIGHT];
+    for (int y = 0; y < TEX_HEIGHT; y++) {
+        for (int x = 0; x < TEX_WIDTH; x++) {
+            int src_x = (x * width) / TEX_WIDTH;
+            int src_y = (y * height) / TEX_HEIGHT;
+            texture_2[x][y] = pixels[src_y * width + src_x];
+        }
+    }
+    SDL_FreeSurface(formattedSurface);
+
+    loadedSurface = SDL_LoadBMP("texture-3.bmp");
+    formattedSurface = SDL_ConvertSurfaceFormat(loadedSurface, SDL_PIXELFORMAT_RGBA8888, 0);
+    SDL_FreeSurface(loadedSurface);
+
+    width = formattedSurface->w;
+    height = formattedSurface->h;
+    pixels = (Uint32*)formattedSurface->pixels;
+
+    Uint32 texture_3[TEX_WIDTH][TEX_HEIGHT];
+    for (int y = 0; y < TEX_HEIGHT; y++) {
+        for (int x = 0; x < TEX_WIDTH; x++) {
+            int src_x = (x * width) / TEX_WIDTH;
+            int src_y = (y * height) / TEX_HEIGHT;
+            texture_3[x][y] = pixels[src_y * width + src_x];
+        }
+    }
+    SDL_FreeSurface(formattedSurface);
 
     Player player = { { 100.0, 100.0 }, 90.0 };
 
@@ -161,7 +275,7 @@ int main() {
                 (deg_to_rad(FOV / 2)) + 
                 ((double)i / (double)WINDOW_WIDTH) * 
                 deg_to_rad(FOV);
-            RayResult result = cast_ray(&player, ray_angle);
+            RayResult result = cast_ray_dda(&player, ray_angle);
             double corrected_dist = result.distance * cos(ray_angle - deg_to_rad(player.angle));
             int line_height = (int)(CELL_SIZE * WINDOW_HEIGHT / corrected_dist);
 
@@ -175,12 +289,28 @@ int main() {
 
             double shading = 1.0 - (corrected_dist / 2000.0); 
 
+            int tex_x = (int)(result.wall_x * (double)TEX_WIDTH);
+
+            if(result.side == 0 && cos(ray_angle) > 0) tex_x = TEX_WIDTH - tex_x - 1;
+            if(result.side == 1 && sin(ray_angle) < 0) tex_x = TEX_WIDTH - tex_x - 1;
+
+
             int draw_start = (WINDOW_HEIGHT / 2) - (line_height / 2);
             int draw_end = (WINDOW_HEIGHT / 2) + (line_height / 2);
             if (draw_start < 0) draw_start = 0;
             if (draw_end >= WINDOW_HEIGHT) draw_end = WINDOW_HEIGHT - 1;
 
-            draw_line(renderer, i, draw_start, i, draw_end, color, shading);
+            double step = 1.0 * TEX_HEIGHT / line_height;
+            double tex_pos = (draw_start - WINDOW_HEIGHT / 2 + line_height / 2) * step;
+
+            // draw_line(renderer, i, draw_start, i, draw_end, color, shading);
+            if (result.hit_wall == 1) {
+                draw_line_textured(renderer, result, tex_x, step, i, draw_start, i, draw_end, texture_1, tex_pos, shading);
+            } else if (result.hit_wall == 2) {
+                draw_line_textured(renderer, result, tex_x, step, i, draw_start, i, draw_end, texture_2, tex_pos, shading);
+            } else {
+                draw_line_textured(renderer, result, tex_x, step, i, draw_start, i, draw_end, texture_3, tex_pos, shading);
+            } 
         }
         // break;
         SDL_RenderPresent(renderer);
