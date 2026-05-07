@@ -19,6 +19,14 @@ This repository contains multiple implementations of a 2D raycasting engine writ
    - Uses ASCII characters to represent different shades based on distance.
    - Non-blocking input for movement.
 
+## Screenshots
+
+### Basic Raycaster (`raycasting.c`)
+![Basic Raycaster](screenshots/basic_raycasting-1.png)
+### DDA & Textured Raycaster (`raycasting_dda.c`)
+![DDA Raycaster](screenshots/dda_raycasting-1.png)
+![DDA Raycaster](screenshots/dda_raycasting-2.png)
+
 ## Prerequisites
 
 To compile and run the SDL2 versions (`raycasting.c` and `raycasting_dda.c`), you must have SDL2 installed on your system.
