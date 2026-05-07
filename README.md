@@ -21,11 +21,12 @@ This repository contains multiple implementations of a 2D raycasting engine writ
 
 ## Screenshots
 
-### Basic Raycaster (`raycasting.c`)
-![Basic Raycaster](screenshots/basic_raycasting-1.png)
 ### DDA & Textured Raycaster (`raycasting_dda.c`)
 ![DDA Raycaster](screenshots/dda_raycasting-1.png)
 ![DDA Raycaster](screenshots/dda_raycasting-2.png)
+
+### Basic Raycaster (`raycasting.c`)
+![Basic Raycaster](screenshots/basic_raycasting-1.png)
 
 ## Prerequisites
 
